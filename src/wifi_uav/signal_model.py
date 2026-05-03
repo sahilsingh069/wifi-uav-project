@@ -10,22 +10,49 @@ from wifi_uav.mobility import GaussMarkovMobility
 
 
 def place_access_points(cfg: ProjectConfig) -> np.ndarray:
-    x_coords = np.linspace(0.2 * cfg.area_size, 0.8 * cfg.area_size, 4)
-    y_coords = np.linspace(0.25 * cfg.area_size, 0.75 * cfg.area_size, 2)
-    xy = np.array([(x, y) for y in y_coords for x in x_coords], dtype=float)
-    return np.column_stack((xy[: cfg.n_aps], np.full(min(cfg.n_aps, len(xy)), cfg.ap_height)))
+    base_x = np.linspace(0.2 * cfg.area_size, 0.8 * cfg.area_size, 4)
+    base_y = np.linspace(0.25 * cfg.area_size, 0.75 * cfg.area_size, 2)
+    positions = [(x, y) for y in base_y for x in base_x]
+
+    if cfg.n_aps > len(positions):
+        cols = int(np.ceil(np.sqrt(cfg.n_aps)))
+        rows = int(np.ceil(cfg.n_aps / cols))
+        grid_x = np.linspace(0.1 * cfg.area_size, 0.9 * cfg.area_size, cols)
+        grid_y = np.linspace(0.1 * cfg.area_size, 0.9 * cfg.area_size, rows)
+        seen = {(round(x, 9), round(y, 9)) for x, y in positions}
+        for y in grid_y:
+            for x in grid_x:
+                key = (round(float(x), 9), round(float(y), 9))
+                if key not in seen:
+                    positions.append((float(x), float(y)))
+                    seen.add(key)
+                if len(positions) == cfg.n_aps:
+                    break
+            if len(positions) == cfg.n_aps:
+                break
+
+    xy = np.array(positions[: cfg.n_aps], dtype=float)
+    return np.column_stack((xy, np.full(cfg.n_aps, cfg.ap_height)))
 
 
 def place_base_stations(cfg: ProjectConfig) -> np.ndarray:
-    xy = np.array(
-        [
-            [0.05 * cfg.area_size, 0.05 * cfg.area_size],
-            [0.95 * cfg.area_size, 0.20 * cfg.area_size],
-            [0.50 * cfg.area_size, 0.95 * cfg.area_size],
-        ],
-        dtype=float,
-    )
-    return np.column_stack((xy[: cfg.n_base_stations], np.full(min(cfg.n_base_stations, len(xy)), cfg.bs_height)))
+    positions = [
+        (0.05 * cfg.area_size, 0.05 * cfg.area_size),
+        (0.95 * cfg.area_size, 0.20 * cfg.area_size),
+        (0.50 * cfg.area_size, 0.95 * cfg.area_size),
+    ]
+
+    if cfg.n_base_stations > len(positions):
+        center = 0.5 * cfg.area_size
+        radius = 0.42 * cfg.area_size
+        for idx in range(cfg.n_base_stations - len(positions)):
+            angle = 2.0 * np.pi * idx / (cfg.n_base_stations - len(positions))
+            x = np.clip(center + radius * np.cos(angle), 0.05 * cfg.area_size, 0.95 * cfg.area_size)
+            y = np.clip(center + radius * np.sin(angle), 0.05 * cfg.area_size, 0.95 * cfg.area_size)
+            positions.append((float(x), float(y)))
+
+    xy = np.array(positions[: cfg.n_base_stations], dtype=float)
+    return np.column_stack((xy, np.full(cfg.n_base_stations, cfg.bs_height)))
 
 
 class PhysicsSignalModel:

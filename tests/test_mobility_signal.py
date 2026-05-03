@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pandas as pd
 
 from wifi_uav.config import get_config
@@ -53,3 +55,14 @@ def test_generate_rf_dataset_has_manual_columns(tmp_path):
     assert required.issubset(df.columns)
     loaded = pd.read_csv(out)
     assert len(loaded) == len(df)
+
+
+def test_generate_rf_dataset_supports_custom_transmitter_counts(tmp_path):
+    cfg = replace(get_config("smoke"), n_aps=9, n_base_stations=4)
+    out = tmp_path / "rf_dataset.csv"
+
+    df = generate_rf_dataset(cfg, out)
+
+    assert out.exists()
+    assert {"wifi_rssi_8", "los_ap_8", "cell_rssi_3"}.issubset(df.columns)
+    assert len(df) == cfg.episodes * cfg.steps_per_episode * cfg.n_users
