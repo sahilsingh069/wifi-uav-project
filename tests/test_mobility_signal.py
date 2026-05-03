@@ -24,6 +24,8 @@ def test_signal_model_outputs_expected_keys():
     assert sample["wifi_rssi"].shape == (cfg.n_users, cfg.n_aps)
     assert sample["cell_rssi"].shape == (cfg.n_users, cfg.n_base_stations)
     assert sample["csi_amp_mean"].shape == (cfg.n_users,)
+    assert sample["csi_amp_std"].shape == (cfg.n_users,)
+    assert sample["csi_amp_max"].shape == (cfg.n_users,)
     assert sample["csi_phase_mean"].shape == (cfg.n_users,)
     assert sample["los_flags"].shape == (cfg.n_users, cfg.n_aps)
 
@@ -34,7 +36,20 @@ def test_generate_rf_dataset_has_manual_columns(tmp_path):
     df = generate_rf_dataset(cfg, out)
     assert out.exists()
     assert len(df) == cfg.episodes * cfg.steps_per_episode * cfg.n_users
-    required = {"episode", "step", "user_id", "x", "y", "wifi_rssi_0", "cell_rssi_0", "csi_amp_mean", "csi_phase_mean"}
+    required = {
+        "episode",
+        "step",
+        "user_id",
+        "x",
+        "y",
+        "csi_amp_mean",
+        "csi_amp_std",
+        "csi_amp_max",
+        "csi_phase_mean",
+    }
+    required.update(f"wifi_rssi_{ap_idx}" for ap_idx in range(cfg.n_aps))
+    required.update(f"los_ap_{ap_idx}" for ap_idx in range(cfg.n_aps))
+    required.update(f"cell_rssi_{bs_idx}" for bs_idx in range(cfg.n_base_stations))
     assert required.issubset(df.columns)
     loaded = pd.read_csv(out)
     assert len(loaded) == len(df)
