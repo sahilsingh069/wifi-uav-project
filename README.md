@@ -30,3 +30,26 @@ python scripts/phase4_sanity_env.py --preset smoke
 python scripts/phase5_train_maddpg.py --preset smoke
 python scripts/phase6_evaluate.py --preset smoke
 ```
+
+## Verified Smoke Run
+
+The local smoke pipeline verifies that every phase executes before moving to Colab full training.
+
+Latest smoke verification:
+
+- Tests: `17 passed`
+- RF dataset: 450 rows, 28 columns
+- Feature tensor: `X_train` shape `(138, 10, 31)`
+- Predictor smoke RMSE: `61.85 m`
+- MADDPG smoke coverage: `83.3%`
+
+Generated artifacts:
+
+- `data/rf_dataset.csv`
+- `data/X_train.npy`
+- `checkpoints/predictor_best.pt`
+- `results/predictor_summary.txt`
+- `results/maddpg_rewards.npy`
+- `results/training_curves.png`
+- `results/baseline_comparison.png`
+- `results/final_summary.txt`
