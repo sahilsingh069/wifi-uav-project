@@ -7,9 +7,9 @@ from wifi_uav.mobility import GaussMarkovMobility
 
 
 class UAVCoverageEnv:
-    def __init__(self, cfg: ProjectConfig, seed: int | None = None, coverage_radius: float = 120.0):
+    def __init__(self, cfg: ProjectConfig, seed: int | None = None, coverage_radius: float | None = None):
         self.cfg = cfg
-        self.coverage_radius = coverage_radius
+        self.coverage_radius = float(cfg.coverage_radius if coverage_radius is None else coverage_radius)
         self.rng = np.random.default_rng(seed)
         self.mobility = GaussMarkovMobility(cfg, seed=seed)
         self.step_count = 0
@@ -47,13 +47,14 @@ class UAVCoverageEnv:
         self.uav_positions[:, 2] = np.clip(self.uav_positions[:, 2], self.cfg.uav_alt_min, self.cfg.uav_alt_max)
 
         energy = np.linalg.norm(displacement, axis=1)
-        self.battery = np.maximum(0.0, self.battery - 0.001 * energy)
+        action_effort = np.linalg.norm(actions_arr, axis=1)
+        self.battery = np.maximum(0.0, self.battery - self.cfg.battery_drain_rate * action_effort)
         self.user_positions = self.mobility.step()
 
         coverage = self._compute_coverage()
         improvement = coverage - self.prev_coverage
         overlap = self._overlap_count()
-        energy_penalty = float(energy.sum() / (self.cfg.n_uavs * self.cfg.v_max * np.sqrt(3.0)))
+        energy_penalty = float(action_effort.sum() / (self.cfg.n_uavs * np.sqrt(3.0)))
         reward = float(coverage + 0.5 * improvement - 0.3 * energy_penalty - 0.5 * overlap / self.cfg.n_uavs)
 
         self.prev_coverage = coverage

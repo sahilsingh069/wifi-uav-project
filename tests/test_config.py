@@ -12,6 +12,11 @@ def test_smoke_config_is_small_and_valid():
     assert cfg.n_uavs == 3
     assert cfg.episodes == 3
     assert cfg.steps_per_episode == 25
+    assert cfg.coverage_radius == 150.0
+    assert cfg.maddpg_warmup_steps == 16
+    assert cfg.maddpg_update_every == 1
+    assert cfg.maddpg_noise_start == 0.30
+    assert cfg.maddpg_noise_end == 0.05
 
 
 def test_full_config_matches_manual_core_values():
@@ -24,6 +29,9 @@ def test_full_config_matches_manual_core_values():
     assert cfg.steps_per_episode == 150
     assert cfg.drl_episodes == 500
     assert cfg.drl_episode_len == 100
+    assert cfg.coverage_radius == 170.0
+    assert cfg.battery_drain_rate == 0.0002
+    assert cfg.maddpg_warmup_steps == 2000
 
 
 def test_invalid_config_name_raises_value_error():

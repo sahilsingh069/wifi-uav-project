@@ -39,8 +39,8 @@ Latest smoke verification:
 
 - Tests: `17 passed`
 - RF dataset: 450 rows, 28 columns
-- Feature tensor: `X_train` shape `(138, 10, 31)`
-- Predictor smoke RMSE: `61.85 m`
+- Feature tensor: `X_train` shape `(138, 10, 33)`
+- Predictor smoke RMSE: `74.20 m`
 - MADDPG smoke coverage: `83.3%`
 
 Generated artifacts:
