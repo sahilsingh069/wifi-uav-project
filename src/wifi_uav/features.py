@@ -6,6 +6,15 @@ import numpy as np
 import pandas as pd
 
 from wifi_uav.config import ProjectConfig
+from wifi_uav.signal_model import place_access_points
+
+
+def _rssi_weighted_ap_centroid(wifi: np.ndarray, cfg: ProjectConfig) -> np.ndarray:
+    ap_xy = place_access_points(cfg)[:, :2].astype(np.float32)
+    stable = (wifi - wifi.max(axis=1, keepdims=True)) / 8.0
+    weights = np.exp(stable).astype(np.float32)
+    weights = weights / np.maximum(weights.sum(axis=1, keepdims=True), 1e-6)
+    return (weights @ ap_xy).astype(np.float32)
 
 
 def _user_features(group: pd.DataFrame, cfg: ProjectConfig) -> tuple[np.ndarray, np.ndarray]:
@@ -25,7 +34,8 @@ def _user_features(group: pd.DataFrame, cfg: ProjectConfig) -> tuple[np.ndarray,
     )
     cell = group[cell_cols].to_numpy(dtype=np.float32)
     csi = group[csi_cols].to_numpy(dtype=np.float32)
-    features = np.concatenate([wifi, delta, rolling_var, cell, csi], axis=1).astype(np.float32)
+    rf_centroid = _rssi_weighted_ap_centroid(wifi, cfg)
+    features = np.concatenate([wifi, delta, rolling_var, cell, csi, rf_centroid], axis=1).astype(np.float32)
     targets = group[["x", "y"]].to_numpy(dtype=np.float32)
     return features, targets
 

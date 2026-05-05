@@ -25,10 +25,16 @@ class ProjectConfig:
     pred_horizon: int = 5
     n_uavs: int = 5
     v_max: float = 20.0
+    coverage_radius: float = 170.0
+    battery_drain_rate: float = 0.0002
     batch_size: int = 256
     learning_rate: float = 1e-3
     drl_episodes: int = 500
     drl_episode_len: int = 100
+    maddpg_warmup_steps: int = 2000
+    maddpg_update_every: int = 1
+    maddpg_noise_start: float = 0.30
+    maddpg_noise_end: float = 0.05
     seed: int = 42
     data_dir: Path = Path("data")
     model_dir: Path = Path("models")
@@ -43,9 +49,12 @@ def get_config(preset: str = "smoke") -> ProjectConfig:
             episodes=3,
             steps_per_episode=25,
             n_uavs=3,
+            coverage_radius=150.0,
             batch_size=32,
             drl_episodes=3,
             drl_episode_len=12,
+            maddpg_warmup_steps=16,
+            maddpg_update_every=1,
         )
     if preset == "medium":
         return ProjectConfig(
@@ -53,9 +62,12 @@ def get_config(preset: str = "smoke") -> ProjectConfig:
             episodes=80,
             steps_per_episode=100,
             n_uavs=5,
+            coverage_radius=165.0,
             batch_size=128,
             drl_episodes=80,
             drl_episode_len=60,
+            maddpg_warmup_steps=512,
+            maddpg_update_every=1,
         )
     if preset == "full":
         return ProjectConfig()

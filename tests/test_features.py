@@ -15,7 +15,7 @@ def test_build_feature_splits_shapes_and_files(tmp_path):
 
     assert splits["X_train"].ndim == 3
     assert splits["X_train"].shape[1] == cfg.seq_len
-    assert splits["X_train"].shape[2] == cfg.n_aps * 3 + cfg.n_base_stations + 4
+    assert splits["X_train"].shape[2] == cfg.n_aps * 3 + cfg.n_base_stations + 4 + 2
     assert splits["y_train"].shape[1] == 2
     assert len(splits["X_train"]) > 0
     assert len(splits["X_val"]) > 0
