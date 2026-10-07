@@ -1,5 +1,7 @@
 # Wi-Fi/Cellular UAV Mobility Prediction and Trajectory Optimization
 
+**[Live demo: 3D drone coverage viewer](https://sahilsingh069.github.io/wifi-uav-project/)**
+
 College project implementing a full RF-signal-to-UAV-control research pipeline:
 
 1. Simulate Wi-Fi/cellular RF measurements for moving users (3GPP TR 38.901 UMi/UMa path loss,
