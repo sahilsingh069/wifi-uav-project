@@ -45,9 +45,14 @@ class UAVCoverageEnv:
         self.observed_user_positions = np.zeros((cfg.n_users, 2), dtype=np.float32)
         self.battery = np.ones(cfg.n_uavs, dtype=np.float32)
 
+    # Number of nearest observed users each UAV sees as relative vectors.
+    K_NEAREST = 6
+
     @property
     def obs_dim(self) -> int:
-        return 3 + (self.cfg.n_uavs - 1) * 3 + 2 + 3 + 1 + 1
+        # own (x, y, h, battery) + other UAVs relative (dx, dy, dh) + K users (dx, dy, covered_by_other)
+        # + user centroid relative (dx, dy) + own share of users + team coverage
+        return 4 + (self.cfg.n_uavs - 1) * 3 + self.K_NEAREST * 3 + 2 + 2
 
     @property
     def act_dim(self) -> int:
@@ -91,9 +96,11 @@ class UAVCoverageEnv:
 
         # UAVs with an empty battery have landed and can no longer move.
         actions_arr[self.battery <= 0.0] = 0.0
+        previous_positions = self.uav_positions.copy()
         self.uav_positions += actions_arr * self.cfg.v_max
         self.uav_positions[:, 0:2] = np.clip(self.uav_positions[:, 0:2], 0.0, self.cfg.area_size)
         self.uav_positions[:, 2] = np.clip(self.uav_positions[:, 2], self.cfg.uav_alt_min, self.cfg.uav_alt_max)
+        distance_flown = float(np.linalg.norm(self.uav_positions - previous_positions, axis=1).mean())
 
         action_effort = np.linalg.norm(actions_arr, axis=1)
         self.battery = np.maximum(0.0, self.battery - self.cfg.battery_drain_rate * action_effort)
@@ -102,11 +109,13 @@ class UAVCoverageEnv:
 
         coverage = self._compute_coverage()
         improvement = coverage - self.prev_coverage
-        overlap = self._overlap_penalty()
+        pair_overlap = self._pairwise_overlap()
+        overlap = self._overlap_penalty(pair_overlap)
         energy_penalty = float(action_effort.sum() / (self.cfg.n_uavs * np.sqrt(3.0)))
         reward = float(
             coverage + 0.5 * improvement - 0.3 * energy_penalty - self.cfg.overlap_penalty_weight * overlap
         )
+        agent_rewards = self._agent_rewards(coverage, improvement, action_effort, pair_overlap)
 
         self.prev_coverage = coverage
         self.step_count += 1
@@ -117,6 +126,8 @@ class UAVCoverageEnv:
             "overlap": overlap,
             "prediction_error_m": self.prediction_error_m(),
             "mean_battery": float(self.battery.mean()),
+            "agent_rewards": agent_rewards,
+            "distance_m": distance_flown,
         }
         return self._observations(), reward, done, info
 
@@ -143,32 +154,82 @@ class UAVCoverageEnv:
     def _compute_coverage(self) -> float:
         return float(self.coverage_mask(self.user_positions).mean())
 
-    def _overlap_penalty(self) -> float:
-        """Mean pairwise footprint overlap in [0, 1]: 0 when discs are disjoint, 1 when stacked."""
+    def _pairwise_overlap(self) -> np.ndarray:
+        """(n, n) footprint overlap in [0, 1]: 0 when discs are disjoint, 1 when stacked."""
+        radii = self.footprint_radius(self.uav_positions[:, 2])
+        dist = np.linalg.norm(self.uav_positions[:, None, :2] - self.uav_positions[None, :, :2], axis=2)
+        reach = np.maximum(radii[:, None] + radii[None, :], 1e-6)
+        overlap = np.clip(1.0 - dist / reach, 0.0, 1.0)
+        np.fill_diagonal(overlap, 0.0)
+        return overlap
+
+    def _overlap_penalty(self, pair_overlap: np.ndarray | None = None) -> float:
+        """Mean pairwise footprint overlap across all UAV pairs."""
         n = self.cfg.n_uavs
         if n < 2:
             return 0.0
+        pair_overlap = self._pairwise_overlap() if pair_overlap is None else pair_overlap
+        return float(pair_overlap.sum() / (n * (n - 1)))
+
+    def _agent_rewards(
+        self,
+        coverage: float,
+        improvement: float,
+        action_effort: np.ndarray,
+        pair_overlap: np.ndarray,
+    ) -> np.ndarray:
+        """Per-UAV reward: the team terms plus a difference reward.
+
+        ``unique`` is the share of users that only this UAV covers, i.e. how much team coverage
+        would drop without it. It tells each agent what *its* move contributed, which a single
+        shared reward cannot.
+        """
+        n = self.cfg.n_uavs
+        active = self.battery > 0.0
         radii = self.footprint_radius(self.uav_positions[:, 2])
-        total = 0.0
-        for first in range(n):
-            for second in range(first + 1, n):
-                distance = np.linalg.norm(self.uav_positions[first, :2] - self.uav_positions[second, :2])
-                total += max(0.0, 1.0 - distance / max(radii[first] + radii[second], 1e-6))
-        return float(total / (n * (n - 1) / 2))
+        dist = np.linalg.norm(self.user_positions[:, None, :] - self.uav_positions[None, :, :2], axis=2)
+        inside = (dist <= radii[None, :]) & active[None, :]
+        unique = (inside & (inside.sum(axis=1, keepdims=True) == 1)).mean(axis=0)
+        own_overlap = pair_overlap.sum(axis=1) / max(n - 1, 1)
+        return (
+            coverage
+            + 0.5 * improvement
+            + self.cfg.marginal_reward_weight * unique
+            - 0.3 * action_effort / np.sqrt(3.0)
+            - self.cfg.overlap_penalty_weight * own_overlap
+        ).astype(np.float32)
 
     def _observations(self) -> list[np.ndarray]:
+        """Egocentric observations: everything is relative to the observing UAV, so the actor can
+        tell which *direction* users and teammates are in (absolute distances alone cannot)."""
+        area = self.cfg.area_size
+        alt_max = self.cfg.uav_alt_max
         users = self.observed_user_positions
-        centroid = users.mean(axis=0) / self.cfg.area_size
-        normalizer = np.array([self.cfg.area_size, self.cfg.area_size, self.cfg.uav_alt_max], dtype=np.float32)
+        radii = self.footprint_radius(self.uav_positions[:, 2])
+        active = self.battery > 0.0
+        user_uav_dist = np.linalg.norm(users[:, None, :] - self.uav_positions[None, :, :2], axis=2)
+        in_footprint = (user_uav_dist <= radii[None, :]) & active[None, :]
         observations = []
         for idx in range(self.cfg.n_uavs):
-            own = self.uav_positions[idx] / normalizer
-            others = np.delete(self.uav_positions, idx, axis=0).reshape(-1)
-            others = others / np.tile(normalizer, self.cfg.n_uavs - 1)
-            distances = np.linalg.norm(users - self.uav_positions[idx, :2], axis=1)
-            top3 = np.sort(distances)[:3] / self.cfg.area_size
-            if len(top3) < 3:
-                top3 = np.pad(top3, (0, 3 - len(top3)), constant_values=1.0)
-            obs = np.concatenate([own, others, centroid, top3, [self.prev_coverage], [self.battery[idx]]])
+            pos = self.uav_positions[idx]
+            own = [pos[0] / area, pos[1] / area, pos[2] / alt_max, self.battery[idx]]
+
+            others = np.delete(self.uav_positions, idx, axis=0) - pos
+            others = others[np.argsort(np.linalg.norm(others[:, :2], axis=1))]
+            others = (others / np.array([area, area, alt_max], dtype=np.float32)).reshape(-1)
+
+            rel_users = (users - pos[:2]) / area
+            nearest = np.argsort(user_uav_dist[:, idx])[: self.K_NEAREST]
+            covered_by_other = np.delete(in_footprint, idx, axis=1).any(axis=1)
+            user_feats = np.column_stack([rel_users[nearest], covered_by_other[nearest].astype(np.float32)])
+            if len(nearest) < self.K_NEAREST:
+                pad = np.tile([[0.0, 0.0, 1.0]], (self.K_NEAREST - len(nearest), 1))
+                user_feats = np.vstack([user_feats, pad])
+
+            centroid = rel_users.mean(axis=0)
+            own_share = in_footprint[:, idx].mean()
+            obs = np.concatenate(
+                [own, others, user_feats.reshape(-1), centroid, [own_share, self.prev_coverage]]
+            )
             observations.append(obs.astype(np.float32))
         return observations

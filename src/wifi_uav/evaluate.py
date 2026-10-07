@@ -11,7 +11,7 @@ import seaborn as sns
 import torch
 
 from wifi_uav.config import ProjectConfig
-from wifi_uav.maddpg import MADDPGAgent
+from wifi_uav.maddpg import SharedMADDPG
 from wifi_uav.predictor import OnlinePositionPredictor
 from wifi_uav.uav_env import UAVCoverageEnv
 
@@ -79,28 +79,58 @@ def greedy_policy(env: UAVCoverageEnv, obs: list[np.ndarray], iterations: int = 
     return actions
 
 
-def load_maddpg_agents(cfg: ProjectConfig, env: UAVCoverageEnv, device: str = "cpu") -> list[MADDPGAgent]:
-    """Load the trained actors saved by phase 5 (critics are only needed for training)."""
-    agents = []
-    for idx in range(cfg.n_uavs):
-        path = cfg.checkpoint_dir / f"maddpg_actor_{idx}.pt"
-        if not path.exists():
-            raise FileNotFoundError(f"Missing {path}; run phase5_train_maddpg.py first")
-        agent = MADDPGAgent(env.obs_dim, env.act_dim, env.obs_dim * cfg.n_uavs, env.act_dim * cfg.n_uavs, device=device)
-        agent.actor.load_state_dict(torch.load(path, map_location=device))
-        agent.actor.eval()
-        agents.append(agent)
-    return agents
+def load_maddpg(cfg: ProjectConfig, env: UAVCoverageEnv, device: str = "cpu") -> SharedMADDPG:
+    """Load the shared actor saved by phase 5 (the critic is only needed for training)."""
+    path = cfg.checkpoint_dir / "maddpg_actor.pt"
+    if not path.exists():
+        raise FileNotFoundError(f"Missing {path}; run phase5_train_maddpg.py first")
+    model = SharedMADDPG.load_actor(path, device=device)
+    if (model.obs_dim, model.n_agents) != (env.obs_dim, cfg.n_uavs):
+        raise RuntimeError(
+            f"{path} was trained for {model.n_agents} UAVs / obs_dim {model.obs_dim}, "
+            f"but this preset has {cfg.n_uavs} UAVs / obs_dim {env.obs_dim}"
+        )
+    return model
 
 
-def maddpg_policy(agents: list) -> Policy:
+def local_greedy_policy(env: UAVCoverageEnv, obs: list[np.ndarray]) -> list[np.ndarray]:
+    """Decentralised heuristic with the same information as one MADDPG actor.
+
+    Each UAV only knows its K nearest observed users and which of them a teammate already covers.
+    It flies toward the centroid of the uncovered ones at the best altitude, and hovers when every
+    nearby user is already covered.
+    """
+    k = env.K_NEAREST
+    users = env.observed_user_positions
+    radii = env.footprint_radius(env.uav_positions[:, 2])
+    dist = np.linalg.norm(users[:, None, :] - env.uav_positions[None, :, :2], axis=2)
+    inside = (dist <= radii[None, :]) & (env.battery > 0.0)[None, :]
+    actions = []
+    for idx, pos in enumerate(env.uav_positions):
+        nearest = np.argsort(dist[:, idx])[:k]
+        covered_by_other = np.delete(inside, idx, axis=1).any(axis=1)[nearest]
+        targets = users[nearest][~covered_by_other]
+        target_xy = targets.mean(axis=0) if len(targets) else pos[:2]
+        delta = np.append(target_xy - pos[:2], env.optimal_altitude - pos[2])
+        actions.append(np.clip(delta / env.cfg.v_max, -1.0, 1.0).astype(np.float32))
+    return actions
+
+
+def maddpg_policy(model: SharedMADDPG) -> Policy:
     def act(env: UAVCoverageEnv, obs: list[np.ndarray]) -> list[np.ndarray]:
-        return [agent.select_action(obs[idx], noise=0.0) for idx, agent in enumerate(agents)]
+        return model.select_actions(obs, noise=0.0)
 
     return act
 
 
-BASELINES: dict[str, Policy] = {"static": static_policy, "random": random_policy, "greedy": greedy_policy}
+# Display name -> policy. "Greedy" is centralised (sees every user); "Local greedy" gets exactly
+# the information one MADDPG actor gets, so it is the like-for-like heuristic comparison.
+BASELINES: dict[str, Policy] = {
+    "Greedy": greedy_policy,
+    "Local greedy": local_greedy_policy,
+    "Static": static_policy,
+    "Random": random_policy,
+}
 
 
 @dataclass
@@ -108,6 +138,7 @@ class PolicyResult:
     mean_coverage: float
     final_coverage: float
     mean_prediction_error_m: float
+    mean_distance_m: float
     heatmap: np.ndarray
 
 
@@ -120,6 +151,7 @@ def evaluate_policy(env: UAVCoverageEnv, policy: Policy, episodes: int = 10, gri
     step_coverages: list[float] = []
     final_coverages: list[float] = []
     errors: list[float] = []
+    distances: list[float] = []
     for _ in range(episodes):
         obs = env.reset()
         info = {"coverage": env.prev_coverage}
@@ -127,6 +159,7 @@ def evaluate_policy(env: UAVCoverageEnv, policy: Policy, episodes: int = 10, gri
             obs, _, done, info = env.step(policy(env, obs))
             step_coverages.append(info["coverage"])
             errors.append(info["prediction_error_m"])
+            distances.append(info["distance_m"])
             heat += env.coverage_mask(grid_points)
             if done:
                 break
@@ -135,14 +168,16 @@ def evaluate_policy(env: UAVCoverageEnv, policy: Policy, episodes: int = 10, gri
         mean_coverage=float(np.mean(step_coverages)),
         final_coverage=float(np.mean(final_coverages)),
         mean_prediction_error_m=float(np.mean(errors)),
+        mean_distance_m=float(np.mean(distances)),
         heatmap=(heat / max(1, len(step_coverages))).reshape(grid, grid),
     )
 
 
 def run_baseline_policy(env: UAVCoverageEnv, policy: str, episodes: int = 10) -> float:
-    if policy not in BASELINES:
+    by_name = {name.lower(): fn for name, fn in BASELINES.items()}
+    if policy.lower() not in by_name:
         raise ValueError(f"Unknown baseline policy: {policy}")
-    return evaluate_policy(env, BASELINES[policy], episodes=episodes).mean_coverage
+    return evaluate_policy(env, by_name[policy.lower()], episodes=episodes).mean_coverage
 
 
 def plot_training_curves(rewards: np.ndarray, coverages: np.ndarray, output: str | Path) -> None:
@@ -203,6 +238,8 @@ def write_summary(
     center_rmse: float | None = None,
     position_source: str = "oracle",
     prediction_error_m: float | None = None,
+    distances_m: dict[str, float] | None = None,
+    local_greedy_coverage: float | None = None,
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -214,10 +251,15 @@ def write_summary(
         lines.append(f"Mean in-env position error: {prediction_error_m:.2f} m")
     lines += [
         f"MADDPG coverage: {maddpg_coverage:.1%}",
-        f"vs Greedy      : {(maddpg_coverage - greedy_coverage) * 100:+.1f} pts",
+        f"vs Greedy (centralised): {(maddpg_coverage - greedy_coverage) * 100:+.1f} pts",
         f"vs Static hover: {(maddpg_coverage - static_coverage) * 100:+.1f} pts",
     ]
     if random_coverage is not None:
         lines.append(f"vs Random walk : {(maddpg_coverage - random_coverage) * 100:+.1f} pts")
+    if local_greedy_coverage is not None:
+        lines.append(f"vs Local greedy (same info as MADDPG): {(maddpg_coverage - local_greedy_coverage) * 100:+.1f} pts")
+    if distances_m:
+        lines.append("Distance flown per UAV per step (energy proxy):")
+        lines += [f"  {name:<7}: {value:.1f} m" for name, value in distances_m.items()]
     lines.append("(coverage = mean over every step of the evaluation episodes, no exploration noise)")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

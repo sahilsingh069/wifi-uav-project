@@ -67,3 +67,18 @@ def test_oracle_mode_observes_true_positions():
     _, _, _, info = env.step([np.zeros(3, dtype=np.float32) for _ in range(cfg.n_uavs)])
 
     assert info["prediction_error_m"] == 0.0
+
+
+def test_agent_rewards_credit_the_uav_that_covers_users():
+    cfg = get_config("smoke")
+    env = UAVCoverageEnv(cfg, seed=cfg.seed)
+    env.reset()
+    env.mobility.positions[:] = 50.0
+    env.uav_positions[:] = [[450.0, 450.0, env.optimal_altitude]] * cfg.n_uavs
+    env.uav_positions[0] = [50.0, 50.0, env.optimal_altitude]
+
+    _, _, _, info = env.step([np.zeros(3, dtype=np.float32) for _ in range(cfg.n_uavs)])
+
+    rewards = info["agent_rewards"]
+    assert rewards.shape == (cfg.n_uavs,)
+    assert rewards[0] > rewards[1:].max()

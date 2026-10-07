@@ -20,6 +20,7 @@
   --series-2: #d95926;
   --series-3: #199e70;
   --series-4: #c98500;
+  --series-5: #d55181;
   --radius: 10px;
   --font: "Inter", system-ui, -apple-system, Segoe UI, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -219,6 +220,8 @@ h2 { margin: 0; font-size: 13px; font-weight: 600; }
 }
 .segmented button:hover { color: var(--text-primary); }
 .segmented button.active { color: var(--text-primary); background: var(--border-strong); }
+#policy { flex-wrap: wrap; }
+#policy button { flex: 1 1 28%; }
 .segmented.small { flex: none; }
 .segmented.small button { padding: 4px 8px; font-size: 12px; }
 

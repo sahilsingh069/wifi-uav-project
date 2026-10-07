@@ -30,6 +30,7 @@ def record_episode(env: UAVCoverageEnv, policy: Policy, steps: int) -> dict:
         "coverage": [],
         "battery": [],
         "error_m": [],
+        "distance_m": [0.0],
     }
 
     def snapshot() -> None:
@@ -44,8 +45,9 @@ def record_episode(env: UAVCoverageEnv, policy: Policy, steps: int) -> dict:
 
     snapshot()
     for _ in range(steps):
-        obs, _, done, _ = env.step(policy(env, obs))
+        obs, _, done, info = env.step(policy(env, obs))
         snapshot()
+        frames["distance_m"].append(round(info["distance_m"], 2))
         if done:
             break
     return frames

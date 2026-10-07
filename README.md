@@ -11,8 +11,11 @@ College project implementing a full RF-signal-to-UAV-control research pipeline:
 4. Build a multi-UAV coverage environment where **UAVs observe the predicted user positions**
    (coverage is still scored on the true positions), altitude trades beam footprint against link
    range, and a UAV with an empty battery lands
-5. Train cooperative MADDPG agents on that environment
-6. Evaluate the trained actors without exploration noise against k-means greedy, random-walk, and
+5. Train cooperative MADDPG agents on that environment: one shared actor and a centralised critic
+   (parameter sharing), egocentric observations (each UAV sees its 6 nearest users and its
+   teammates), and per-UAV difference rewards (the users only that UAV covers)
+6. Evaluate the trained actor without exploration noise against centralised k-means greedy,
+   decentralised local greedy (same information as one MADDPG actor), random-walk, and
    static-hover baselines on identical held-out trajectories
 
 Every phase accepts `--positions oracle` (where relevant) to rerun with ground-truth user positions,
@@ -65,14 +68,45 @@ Presets: `smoke` (minutes, checks wiring only, numbers are meaningless), `medium
 - `results/training_curves.png`, `results/baseline_comparison.png`, `results/coverage_heatmap.png`
 - `checkpoints/predictor_best.pt`, `checkpoints/maddpg_actor_*.pt`
 
-## Verified Runs
+## Results
 
-- Tests: `25 passed`
-- Smoke pipeline runs end to end (all 6 phases)
-- Medium preset, predictor after 6 CPU epochs: test RMSE `73.5 m` on held-out episodes vs `202.7 m`
-  for always guessing the centre of the 500 m x 500 m area
-- Medium preset, 80 MADDPG episodes, predicted positions, 10 eval episodes per policy (mean coverage):
-  k-means greedy `98.3%`, static `74.7%`, random `59.1%`, MADDPG `40.7%`. With this little training
-  the actors saturate and push UAVs to the area edges. Greedy with ground-truth positions reaches
-  `99.3%`, so RF prediction error (`57.5 m` mean in-env) costs only about 1 point of coverage.
-  MADDPG needs the full preset (500 episodes) and/or tuning before it can beat greedy.
+Medium preset (18 users, 5 UAVs, 500 m x 500 m), UAVs observing **RF-predicted** user positions,
+50 held-out evaluation episodes per policy, coverage averaged over every step:
+
+| Policy | Coverage | Information used |
+|---|---|---|
+| Greedy (centralised k-means) | 97.7% | every user's position, plans for all UAVs at once |
+| Local greedy | 97.1% | same as one MADDPG actor |
+| **MADDPG (600 episodes)** | **90.5%** | 6 nearest users + teammates, learned policy |
+| Static hover | 64.7% | none |
+| Random walk | 58.9% | none |
+
+- Position predictor: test RMSE `75.3 m` on held-out episodes vs `202.7 m` for always guessing the
+  area centre. Greedy loses only about 1 point of coverage when it uses predicted instead of true
+  positions, so RF-only localisation is good enough for coverage control.
+- MADDPG beats static hover by 26 points and random by 32, but still trails both hand-written
+  heuristics by about 7 points. In this environment coverage is close to a clustering problem,
+  which greedy solves almost exactly; RL would earn its keep with objectives a heuristic can't
+  express (obstacles, link quality, battery-aware hand-offs).
+- How MADDPG got from 47% to 90.5%: the first version gave each UAV only distances (no direction)
+  to its nearest users, so its actors saturated and pinned 39% of UAVs to the area edge. Egocentric
+  relative observations, a pre-tanh action penalty, a slower actor learning rate, parameter sharing,
+  difference rewards, and 600 training episodes fixed that (edge-pinning down to under 5%).
+  Doubling gradient updates per step did not help further.
+
+Reproduce (about 10 minutes on a laptop CPU for MADDPG):
+
+```bash
+python scripts/phase1_collect_data.py --preset medium
+python scripts/phase2_build_features.py --preset medium
+python scripts/phase3_train_predictor.py --preset medium --epochs 8
+python scripts/phase5_train_maddpg.py --preset medium            # 600 episodes
+python scripts/phase6_evaluate.py --preset medium --episodes 50
+```
+
+`phase5_train_maddpg.py` and `phase6_evaluate.py` accept `--set key=value` to override any config
+field (for example `--set maddpg_gamma=0.9`).
+
+## Tests
+
+`30 passed` (`pytest -q`); the smoke pipeline runs all 6 phases end to end.

@@ -28,6 +28,7 @@ class ProjectConfig:
     coverage_radius: float = 170.0
     beam_half_angle_deg: float = 60.0
     overlap_penalty_weight: float = 0.3
+    marginal_reward_weight: float = 1.0
     battery_drain_rate: float = 0.008
     position_source: str = "predicted"
     batch_size: int = 256
@@ -40,6 +41,9 @@ class ProjectConfig:
     maddpg_update_every: int = 1
     maddpg_noise_start: float = 0.30
     maddpg_noise_end: float = 0.05
+    maddpg_actor_lr: float = 3e-4
+    maddpg_gamma: float = 0.95
+    maddpg_updates_per_step: int = 1
     seed: int = 42
     data_dir: Path = Path("data")
     model_dir: Path = Path("models")
@@ -71,7 +75,7 @@ def get_config(preset: str = "smoke") -> ProjectConfig:
             coverage_radius=165.0,
             batch_size=128,
             predictor_epochs=40,
-            drl_episodes=80,
+            drl_episodes=600,
             drl_episode_len=60,
             maddpg_warmup_steps=512,
             maddpg_update_every=1,
@@ -79,3 +83,18 @@ def get_config(preset: str = "smoke") -> ProjectConfig:
     if preset == "full":
         return ProjectConfig()
     raise ValueError(f"Unknown config preset: {preset}")
+
+
+def apply_overrides(cfg: ProjectConfig, overrides: list[str]) -> ProjectConfig:
+    """Apply ``key=value`` overrides (e.g. from ``--set``), converting to each field's type."""
+    from dataclasses import fields, replace
+
+    types = {field.name: type(getattr(cfg, field.name)) for field in fields(cfg)}
+    changes = {}
+    for item in overrides:
+        key, sep, value = item.partition("=")
+        if not sep or key not in types:
+            raise ValueError(f"Bad override {item!r}; expected key=value with key in ProjectConfig")
+        kind = types[key]
+        changes[key] = value.lower() in {"1", "true", "yes"} if kind is bool else kind(value)
+    return replace(cfg, **changes)

@@ -20,10 +20,14 @@ const SERIES = {
   Greedy: token("--series-2"),
   Static: token("--series-3"),
   Random: token("--series-4"),
+  "Local greedy": token("--series-5"),
 };
 const POLICY_HINTS = {
-  MADDPG: "Trained multi-agent RL: one actor network per drone, learned with a shared critic.",
-  Greedy: "K-means baseline: each drone flies to the centre of its user cluster at the best altitude.",
+  MADDPG:
+    "Trained multi-agent RL. Each drone sees only its 6 nearest users and its teammates; one shared actor, centralised critic.",
+  Greedy: "Centralised baseline: sees every user and runs k-means; each drone flies to its cluster centre at the best altitude.",
+  "Local greedy":
+    "Decentralised baseline with exactly the information one MADDPG drone has: fly toward nearby users no teammate covers.",
   Static: "Baseline: drones hover wherever they start.",
   Random: "Baseline: every drone makes a random move each step.",
 };
@@ -387,20 +391,23 @@ function renderControls() {
 }
 
 function renderResults() {
-  const modes = data.meta.modes;
-  const head = `<tr><th>Policy</th>${modes.map((m) => `<th>${MODE_LABELS[m]}</th>`).join("")}</tr>`;
+  const summary = data.summary[state.mode];
+  const head = "<tr><th>Policy</th><th>Coverage</th><th>Flown per step</th></tr>";
   const rows = data.meta.policies
     .map((p) => {
-      const cells = modes.map((m) => `<td>${(data.summary[m][p] * 100).toFixed(1)}%</td>`).join("");
-      return `<tr class="${p === state.policy ? "current" : ""}"><td>${p}</td>${cells}</tr>`;
+      const { coverage, distance_m: distance } = summary[p];
+      return `<tr class="${p === state.policy ? "current" : ""}"><td>${p}</td>
+        <td>${(coverage * 100).toFixed(1)}%</td><td>${distance.toFixed(1)} m</td></tr>`;
     })
     .join("");
   $("results").innerHTML = head + rows;
-  $("results-sub").textContent = `Mean coverage, ${data.meta.episodes} held-out episodes`;
+  $("results-sub").textContent =
+    `${MODE_LABELS[state.mode]} · mean over ${data.meta.episodes} held-out episodes`;
   const m = data.meta;
   $("predictor-line").textContent =
     m.rmse_meters != null
-      ? `Position predictor test error: ${m.rmse_meters} m RMSE (guessing the area centre: ${m.center_guess_rmse_meters} m).`
+      ? `Position predictor test error: ${m.rmse_meters} m RMSE (guessing the area centre: ${m.center_guess_rmse_meters} m). ` +
+        "Flown per step is each drone's average movement, a proxy for battery use."
       : "";
 }
 

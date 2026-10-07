@@ -43,3 +43,12 @@ def test_invalid_config_name_raises_value_error():
         assert "Unknown config preset" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_apply_overrides_converts_types():
+    from wifi_uav.config import apply_overrides
+
+    cfg = apply_overrides(get_config("smoke"), ["maddpg_gamma=0.9", "maddpg_updates_per_step=2"])
+
+    assert cfg.maddpg_gamma == 0.9
+    assert cfg.maddpg_updates_per_step == 2
