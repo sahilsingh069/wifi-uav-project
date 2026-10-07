@@ -29,3 +29,14 @@ def test_write_summary_creates_file(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "Predictor RMSE" in text
     assert "MADDPG coverage" in text
+
+
+def test_greedy_beats_static_on_same_trajectories():
+    from wifi_uav.evaluate import evaluate_policy, greedy_policy, static_policy
+
+    cfg = get_config("medium")
+    greedy = evaluate_policy(UAVCoverageEnv(cfg, seed=7), greedy_policy, episodes=2)
+    static = evaluate_policy(UAVCoverageEnv(cfg, seed=7), static_policy, episodes=2)
+
+    assert greedy.mean_coverage > static.mean_coverage
+    assert greedy.heatmap.shape == (50, 50)

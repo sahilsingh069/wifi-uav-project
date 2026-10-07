@@ -26,3 +26,16 @@ def test_build_feature_splits_shapes_and_files(tmp_path):
     assert np.isfinite(splits["y_train"]).all()
     assert (out_dir / "X_train.npy").exists()
     assert (out_dir / "normalization.npz").exists()
+
+
+def test_splits_are_disjoint_by_episode(tmp_path):
+    cfg = get_config("smoke")
+    csv_path = tmp_path / "rf_dataset.csv"
+    generate_rf_dataset(cfg, csv_path)
+
+    build_feature_splits(cfg, csv_path, tmp_path)
+
+    norm = np.load(tmp_path / "normalization.npz")
+    train, val, test = (set(norm[f"episodes_{name}"].tolist()) for name in ("train", "val", "test"))
+    assert train and val and test
+    assert not (train & val) and not (train & test) and not (val & test)

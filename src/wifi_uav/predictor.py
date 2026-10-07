@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
+
+if TYPE_CHECKING:
+    from wifi_uav.config import ProjectConfig
 
 
 class LSTMTransformerPredictor(nn.Module):
@@ -123,7 +127,10 @@ def train_predictor_on_arrays(
             if checkpoint_path is not None:
                 checkpoint_path = Path(checkpoint_path)
                 checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-                torch.save({"model": best_state, "history": history}, checkpoint_path)
+                torch.save(
+                    {"model": best_state, "history": history, "input_dim": int(x_train.shape[-1])},
+                    checkpoint_path,
+                )
         else:
             stale += 1
 
@@ -149,3 +156,91 @@ def rmse_meters(
     pred = model(torch.tensor(x, dtype=torch.float32, device=device)).cpu().numpy()
     err = (pred - y) * area_size
     return float(np.sqrt(np.mean(np.sum(err * err, axis=1))))
+
+
+def center_guess_rmse_meters(y: np.ndarray, area_size: float) -> float:
+    """RMSE of always predicting the area centre: the floor any useful predictor must beat."""
+    err = (np.asarray(y) - 0.5) * area_size
+    return float(np.sqrt(np.mean(np.sum(err * err, axis=1))))
+
+
+def load_predictor(checkpoint_path: str | Path, device: str | torch.device = "cpu") -> LSTMTransformerPredictor:
+    state = torch.load(checkpoint_path, map_location=device)
+    weights = state["model"]
+    input_dim = int(state.get("input_dim", weights["input_proj.0.weight"].shape[1]))
+    model = LSTMTransformerPredictor(input_dim=input_dim).to(device)
+    model.load_state_dict(weights)
+    model.eval()
+    return model
+
+
+class OnlinePositionPredictor:
+    """Turns a live stream of RF measurements into predicted user positions.
+
+    Keeps a short rolling history of raw measurements per user, rebuilds the same feature
+    windows used in training, and returns the predicted (x, y) ``pred_horizon`` steps ahead.
+    """
+
+    def __init__(
+        self,
+        cfg: "ProjectConfig",
+        model: LSTMTransformerPredictor,
+        mean: np.ndarray,
+        std: np.ndarray,
+        device: str | torch.device = "cpu",
+    ) -> None:
+        self.cfg = cfg
+        self.device = torch.device(device)
+        self.model = model.to(self.device).eval()
+        self.mean = np.asarray(mean, dtype=np.float32).reshape(1, 1, -1)
+        self.std = np.asarray(std, dtype=np.float32).reshape(1, 1, -1)
+        # Two extra rows so delta/rolling-variance at the window start match offline features.
+        self.history_len = cfg.seq_len + 2
+        self.history: list[dict[str, np.ndarray]] = []
+
+    @classmethod
+    def from_files(
+        cls,
+        cfg: "ProjectConfig",
+        checkpoint_path: str | Path,
+        normalization_path: str | Path,
+        device: str | torch.device = "cpu",
+    ) -> "OnlinePositionPredictor":
+        norm = np.load(normalization_path)
+        return cls(cfg, load_predictor(checkpoint_path, device), norm["mean"], norm["std"], device)
+
+    def reset(self) -> None:
+        self.history = []
+
+    def observe(self, sample: dict[str, np.ndarray]) -> None:
+        self.history.append(
+            {
+                "wifi": np.asarray(sample["wifi_rssi"], dtype=np.float32),
+                "cell": np.asarray(sample["cell_rssi"], dtype=np.float32),
+                "csi": np.column_stack(
+                    [sample[name] for name in ("csi_amp_mean", "csi_amp_std", "csi_amp_max", "csi_phase_mean")]
+                ).astype(np.float32),
+            }
+        )
+        self.history = self.history[-self.history_len :]
+
+    @torch.no_grad()
+    def predict(self) -> np.ndarray:
+        from wifi_uav.features import rf_feature_matrix
+
+        if not self.history:
+            raise RuntimeError("observe() must be called before predict()")
+        wifi = np.stack([h["wifi"] for h in self.history], axis=1)
+        cell = np.stack([h["cell"] for h in self.history], axis=1)
+        csi = np.stack([h["csi"] for h in self.history], axis=1)
+        windows = []
+        for user in range(wifi.shape[0]):
+            feats = rf_feature_matrix(wifi[user], cell[user], csi[user], self.cfg)[-self.cfg.seq_len :]
+            if len(feats) < self.cfg.seq_len:
+                # Episode start: pad by repeating the earliest step until a full window exists.
+                pad = np.repeat(feats[:1], self.cfg.seq_len - len(feats), axis=0)
+                feats = np.concatenate([pad, feats], axis=0)
+            windows.append(feats)
+        x = (np.stack(windows) - self.mean) / self.std
+        pred = self.model(torch.tensor(x, dtype=torch.float32, device=self.device)).cpu().numpy()
+        return (pred * self.cfg.area_size).astype(np.float32)

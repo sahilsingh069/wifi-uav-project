@@ -1,4 +1,5 @@
 from dataclasses import replace
+import numpy as np
 
 import pandas as pd
 
@@ -66,3 +67,25 @@ def test_generate_rf_dataset_supports_custom_transmitter_counts(tmp_path):
     assert out.exists()
     assert {"wifi_rssi_8", "los_ap_8", "cell_rssi_3"}.issubset(df.columns)
     assert len(df) == cfg.episodes * cfg.steps_per_episode * cfg.n_users
+
+
+def test_shadowing_is_correlated_for_slow_users():
+    cfg = get_config("smoke")
+    model = PhysicsSignalModel(cfg, seed=0)
+    xy = model.rng.uniform(0.0, cfg.area_size, size=(cfg.n_users, 2))
+    first = model.measure(xy)["wifi_rssi"]
+    second = model.measure(xy + 0.5)["wifi_rssi"]
+    model.reset_links()
+    independent = model.measure(xy + 0.5)["wifi_rssi"]
+
+    assert np.abs(second - first).mean() < np.abs(independent - first).mean()
+
+
+def test_csi_depends_on_link_distance():
+    cfg = get_config("smoke")
+    model = PhysicsSignalModel(cfg, seed=0)
+    n = 2000
+    near = model._csi_summary(np.full(n, 10.0), np.ones(n, dtype=bool))
+    far = model._csi_summary(np.full(n, 300.0), np.zeros(n, dtype=bool))
+
+    assert near["csi_amp_std"].mean() < far["csi_amp_std"].mean()
