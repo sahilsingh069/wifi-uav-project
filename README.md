@@ -16,6 +16,21 @@ College project implementing a full RF-signal-to-UAV-control research pipeline:
 Every phase accepts `--positions oracle` (where relevant) to rerun with ground-truth user positions,
 which gives an upper bound for how much prediction error costs in coverage.
 
+## Web Viewer
+
+`web/` is a static 3D replay viewer (Three.js, no build step). Drones fly over the area with their
+coverage cones, users turn green or red, and yellow rings show where the RF predictor thinks each
+user is. You can switch policy, position source, and episode, and compare coverage over time.
+
+```bash
+python scripts/export_replays.py --preset medium --steps 80   # writes web/data/replays.json
+python -m http.server 8000 -d web                             # open http://localhost:8000
+```
+
+Links can open a specific moment: `?policy=Greedy&mode=oracle&episode=2&t=40`.
+Pushing changes under `web/` deploys it to GitHub Pages via `.github/workflows/pages.yml`
+(one-time setup: repo Settings -> Pages -> Source: GitHub Actions).
+
 ## Recommended Runtime
 
 Use Google Colab with GPU enabled for training. Local execution is intended for smoke tests and development.

@@ -40,3 +40,17 @@ def test_greedy_beats_static_on_same_trajectories():
 
     assert greedy.mean_coverage > static.mean_coverage
     assert greedy.heatmap.shape == (50, 50)
+
+
+def test_record_episode_frames_are_consistent():
+    from wifi_uav.evaluate import greedy_policy
+    from wifi_uav.replay import record_episode
+
+    cfg = get_config("smoke")
+    frames = record_episode(UAVCoverageEnv(cfg, seed=3), greedy_policy, steps=5)
+
+    assert len(frames["uavs"]) == 6
+    assert len(frames["uavs"][0]) == cfg.n_uavs and len(frames["uavs"][0][0]) == 3
+    assert len(frames["users"][0]) == cfg.n_users
+    for covered, coverage in zip(frames["covered"], frames["coverage"]):
+        assert abs(sum(covered) / cfg.n_users - coverage) < 1e-3

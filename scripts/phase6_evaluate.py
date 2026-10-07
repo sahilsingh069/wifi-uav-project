@@ -10,6 +10,7 @@ from wifi_uav.config import get_config
 from wifi_uav.evaluate import (
     BASELINES,
     evaluate_policy,
+    load_maddpg_agents,
     maddpg_policy,
     make_env,
     plot_baselines,
@@ -17,7 +18,6 @@ from wifi_uav.evaluate import (
     plot_training_curves,
     write_summary,
 )
-from wifi_uav.maddpg import MADDPGAgent
 
 
 def _read_metric(text: str, key: str) -> float | None:
@@ -50,15 +50,7 @@ def main() -> None:
         return make_env(cfg, seed=eval_seed, use_predictor=positions == "predicted", device=device)
 
     env = fresh_env()
-    agents = []
-    for idx in range(cfg.n_uavs):
-        path = cfg.checkpoint_dir / f"maddpg_actor_{idx}.pt"
-        if not path.exists():
-            raise FileNotFoundError(f"Missing {path}; run phase5_train_maddpg.py first")
-        agent = MADDPGAgent(env.obs_dim, env.act_dim, env.obs_dim * cfg.n_uavs, env.act_dim * cfg.n_uavs, device=device)
-        agent.actor.load_state_dict(torch.load(path, map_location=device))
-        agent.actor.eval()
-        agents.append(agent)
+    agents = load_maddpg_agents(cfg, env, device)
 
     results = {"MADDPG": evaluate_policy(env, maddpg_policy(agents), episodes=episodes)}
     for name, policy in BASELINES.items():

@@ -13,3 +13,4 @@ checkpoints/*
 !checkpoints/.gitkeep
 results/*
 !results/.gitkeep
+.venv/

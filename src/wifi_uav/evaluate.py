@@ -8,7 +8,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
+import torch
+
 from wifi_uav.config import ProjectConfig
+from wifi_uav.maddpg import MADDPGAgent
 from wifi_uav.predictor import OnlinePositionPredictor
 from wifi_uav.uav_env import UAVCoverageEnv
 
@@ -74,6 +77,20 @@ def greedy_policy(env: UAVCoverageEnv, obs: list[np.ndarray], iterations: int = 
         delta = np.append(target - pos[:2], env.optimal_altitude - pos[2])
         actions.append(np.clip(delta / env.cfg.v_max, -1.0, 1.0).astype(np.float32))
     return actions
+
+
+def load_maddpg_agents(cfg: ProjectConfig, env: UAVCoverageEnv, device: str = "cpu") -> list[MADDPGAgent]:
+    """Load the trained actors saved by phase 5 (critics are only needed for training)."""
+    agents = []
+    for idx in range(cfg.n_uavs):
+        path = cfg.checkpoint_dir / f"maddpg_actor_{idx}.pt"
+        if not path.exists():
+            raise FileNotFoundError(f"Missing {path}; run phase5_train_maddpg.py first")
+        agent = MADDPGAgent(env.obs_dim, env.act_dim, env.obs_dim * cfg.n_uavs, env.act_dim * cfg.n_uavs, device=device)
+        agent.actor.load_state_dict(torch.load(path, map_location=device))
+        agent.actor.eval()
+        agents.append(agent)
+    return agents
 
 
 def maddpg_policy(agents: list) -> Policy:
