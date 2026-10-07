@@ -54,3 +54,8 @@ Presets: `smoke` (minutes, checks wiring only, numbers are meaningless), `medium
 - Smoke pipeline runs end to end (all 6 phases)
 - Medium preset, predictor after 6 CPU epochs: test RMSE `73.5 m` on held-out episodes vs `202.7 m`
   for always guessing the centre of the 500 m x 500 m area
+- Medium preset, 80 MADDPG episodes, predicted positions, 10 eval episodes per policy (mean coverage):
+  k-means greedy `98.3%`, static `74.7%`, random `59.1%`, MADDPG `40.7%`. With this little training
+  the actors saturate and push UAVs to the area edges. Greedy with ground-truth positions reaches
+  `99.3%`, so RF prediction error (`57.5 m` mean in-env) costs only about 1 point of coverage.
+  MADDPG needs the full preset (500 episodes) and/or tuning before it can beat greedy.
