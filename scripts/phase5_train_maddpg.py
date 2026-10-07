@@ -6,20 +6,24 @@ import numpy as np
 import torch
 
 from wifi_uav.config import get_config
+from wifi_uav.evaluate import make_env
 from wifi_uav.maddpg import MADDPGAgent, ReplayBuffer, update_agents
-from wifi_uav.uav_env import UAVCoverageEnv
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--preset", default="smoke", choices=["smoke", "medium", "full"])
+    parser.add_argument("--positions", choices=["predicted", "oracle"], default=None)
     args = parser.parse_args()
 
     cfg = get_config(args.preset)
-    env = UAVCoverageEnv(cfg, seed=cfg.seed)
+    positions = args.positions or cfg.position_source
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Training trajectories use a different seed from the RF dataset and from evaluation.
+    env = make_env(cfg, seed=cfg.seed + 1000, use_predictor=positions == "predicted", device=device)
     obs = env.reset()
     obs_dim = len(obs[0])
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Training with {positions} user positions on {device}")
     agents = [
         MADDPGAgent(
             obs_dim,
@@ -38,7 +42,7 @@ def main() -> None:
     for ep in range(cfg.drl_episodes):
         obs = env.reset()
         ep_reward = 0.0
-        last_cov = 0.0
+        step_covs: list[float] = []
         for _ in range(cfg.drl_episode_len):
             progress = ep / max(1, cfg.drl_episodes - 1)
             noise = max(cfg.maddpg_noise_end, cfg.maddpg_noise_start * (1.0 - progress))
@@ -51,12 +55,12 @@ def main() -> None:
                 update_agents(agents, batch)
             obs = next_obs
             ep_reward += reward
-            last_cov = info["coverage"]
+            step_covs.append(info["coverage"])
             if done:
                 break
         rewards.append(ep_reward)
-        coverages.append(last_cov)
-        print(f"Episode {ep + 1}: reward={ep_reward:.3f}, coverage={last_cov:.1%}, replay={len(buffer)}")
+        coverages.append(float(np.mean(step_covs)))
+        print(f"Episode {ep + 1}: reward={ep_reward:.3f}, mean coverage={coverages[-1]:.1%}, replay={len(buffer)}")
 
     cfg.result_dir.mkdir(parents=True, exist_ok=True)
     np.save(cfg.result_dir / "maddpg_rewards.npy", np.asarray(rewards, dtype=np.float32))
@@ -64,6 +68,7 @@ def main() -> None:
     (cfg.result_dir / "maddpg_training_summary.txt").write_text(
         "\n".join(
             [
+                f"positions={positions}",
                 f"episodes={cfg.drl_episodes}",
                 f"episode_len={cfg.drl_episode_len}",
                 f"warmup_steps={cfg.maddpg_warmup_steps}",

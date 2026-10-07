@@ -30,7 +30,9 @@ def test_full_config_matches_manual_core_values():
     assert cfg.drl_episodes == 500
     assert cfg.drl_episode_len == 100
     assert cfg.coverage_radius == 170.0
-    assert cfg.battery_drain_rate == 0.0002
+    assert cfg.battery_drain_rate == 0.008
+    assert cfg.position_source == "predicted"
+    assert cfg.predictor_epochs == 80
     assert cfg.maddpg_warmup_steps == 2000
 
 

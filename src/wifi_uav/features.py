@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from wifi_uav.config import ProjectConfig
-from wifi_uav.signal_model import place_access_points
+from wifi_uav.signal_model import CSI_COLUMNS, place_access_points
 
 
 def _rssi_weighted_ap_centroid(wifi: np.ndarray, cfg: ProjectConfig) -> np.ndarray:
@@ -17,33 +17,43 @@ def _rssi_weighted_ap_centroid(wifi: np.ndarray, cfg: ProjectConfig) -> np.ndarr
     return (weights @ ap_xy).astype(np.float32)
 
 
+def rf_feature_matrix(wifi: np.ndarray, cell: np.ndarray, csi: np.ndarray, cfg: ProjectConfig) -> np.ndarray:
+    """Per-step features for one user's RF time series (rows ordered by time).
+
+    Shared by offline dataset building and the online predictor inside the UAV env so both
+    see exactly the same feature definition.
+    """
+    wifi = np.asarray(wifi, dtype=np.float32)
+    delta = np.vstack([np.zeros((1, wifi.shape[1]), dtype=np.float32), np.diff(wifi, axis=0)])
+    rolling_var = (
+        pd.DataFrame(wifi).rolling(window=3, min_periods=1).var().fillna(0.0).to_numpy(dtype=np.float32)
+    )
+    rf_centroid = _rssi_weighted_ap_centroid(wifi, cfg)
+    return np.concatenate(
+        [wifi, delta, rolling_var, np.asarray(cell, dtype=np.float32), np.asarray(csi, dtype=np.float32), rf_centroid],
+        axis=1,
+    ).astype(np.float32)
+
+
 def _user_features(group: pd.DataFrame, cfg: ProjectConfig) -> tuple[np.ndarray, np.ndarray]:
     group = group.sort_values("step")
     wifi_cols = [f"wifi_rssi_{idx}" for idx in range(cfg.n_aps)]
     cell_cols = [f"cell_rssi_{idx}" for idx in range(cfg.n_base_stations)]
-    csi_cols = ["csi_amp_mean", "csi_amp_std", "csi_amp_max", "csi_phase_mean"]
-
-    wifi = group[wifi_cols].to_numpy(dtype=np.float32)
-    delta = np.vstack([np.zeros((1, cfg.n_aps), dtype=np.float32), np.diff(wifi, axis=0)])
-    rolling_var = (
-        group[wifi_cols]
-        .rolling(window=3, min_periods=1)
-        .var()
-        .fillna(0.0)
-        .to_numpy(dtype=np.float32)
+    features = rf_feature_matrix(
+        group[wifi_cols].to_numpy(dtype=np.float32),
+        group[cell_cols].to_numpy(dtype=np.float32),
+        group[CSI_COLUMNS].to_numpy(dtype=np.float32),
+        cfg,
     )
-    cell = group[cell_cols].to_numpy(dtype=np.float32)
-    csi = group[csi_cols].to_numpy(dtype=np.float32)
-    rf_centroid = _rssi_weighted_ap_centroid(wifi, cfg)
-    features = np.concatenate([wifi, delta, rolling_var, cell, csi, rf_centroid], axis=1).astype(np.float32)
     targets = group[["x", "y"]].to_numpy(dtype=np.float32)
     return features, targets
 
 
-def build_sequences(df: pd.DataFrame, cfg: ProjectConfig) -> tuple[np.ndarray, np.ndarray]:
+def build_sequences(df: pd.DataFrame, cfg: ProjectConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     windows: list[np.ndarray] = []
     labels: list[np.ndarray] = []
-    for (_, _), group in df.groupby(["episode", "user_id"], sort=True):
+    episodes: list[int] = []
+    for (episode, _), group in df.groupby(["episode", "user_id"], sort=True):
         features, targets = _user_features(group, cfg)
         max_start = len(group) - cfg.seq_len - cfg.pred_horizon + 1
         for start in range(max(0, max_start)):
@@ -51,11 +61,12 @@ def build_sequences(df: pd.DataFrame, cfg: ProjectConfig) -> tuple[np.ndarray, n
             target_idx = end + cfg.pred_horizon - 1
             windows.append(features[start:end])
             labels.append(targets[target_idx])
+            episodes.append(int(episode))
 
     if not windows:
         raise ValueError("No sequences were created; increase steps_per_episode or reduce seq_len/pred_horizon")
 
-    return np.stack(windows).astype(np.float32), np.stack(labels).astype(np.float32)
+    return np.stack(windows).astype(np.float32), np.stack(labels).astype(np.float32), np.asarray(episodes)
 
 
 def build_feature_splits(
@@ -67,33 +78,37 @@ def build_feature_splits(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(csv_path)
-    x, y = build_sequences(df, cfg)
+    x, y, episodes = build_sequences(df, cfg)
+    y = y / cfg.area_size
 
+    # Split by episode: windows from one trajectory overlap heavily, so a random per-window
+    # split would leak near-duplicate samples from train into test.
     rng = np.random.default_rng(cfg.seed)
-    order = rng.permutation(len(x))
-    x = x[order]
-    y = y[order] / cfg.area_size
+    unique_eps = rng.permutation(np.unique(episodes))
+    n_eps = len(unique_eps)
+    n_val_eps = max(1, round(0.15 * n_eps))
+    n_test_eps = max(1, round(0.15 * n_eps))
+    n_train_eps = n_eps - n_val_eps - n_test_eps
+    if n_train_eps < 1:
+        raise ValueError("Need at least 3 episodes for non-empty train/val/test splits")
+    split_eps = {
+        "train": unique_eps[:n_train_eps],
+        "val": unique_eps[n_train_eps : n_train_eps + n_val_eps],
+        "test": unique_eps[n_train_eps + n_val_eps :],
+    }
+    idx = {name: rng.permutation(np.flatnonzero(np.isin(episodes, eps))) for name, eps in split_eps.items()}
 
-    n_train = int(0.70 * len(x))
-    n_val = int(0.15 * len(x))
-    if n_train == 0 or n_val == 0 or len(x) - n_train - n_val == 0:
-        raise ValueError("Not enough sequences for non-empty train/val/test splits")
-
-    train_x = x[:n_train]
+    train_x = x[idx["train"]]
     mean = train_x.mean(axis=(0, 1), keepdims=True)
     std = train_x.std(axis=(0, 1), keepdims=True)
     std = np.where(std < 1e-6, 1.0, std)
     x = ((x - mean) / std).astype(np.float32)
     y = y.astype(np.float32)
 
-    splits = {
-        "X_train": x[:n_train],
-        "y_train": y[:n_train],
-        "X_val": x[n_train : n_train + n_val],
-        "y_val": y[n_train : n_train + n_val],
-        "X_test": x[n_train + n_val :],
-        "y_test": y[n_train + n_val :],
-    }
+    splits = {}
+    for name in ("train", "val", "test"):
+        splits[f"X_{name}"] = x[idx[name]]
+        splits[f"y_{name}"] = y[idx[name]]
 
     for name, arr in splits.items():
         np.save(output_dir / f"{name}.npy", arr.astype(np.float32))
@@ -102,5 +117,6 @@ def build_feature_splits(
         mean=mean.astype(np.float32),
         std=std.astype(np.float32),
         area_size=np.float32(cfg.area_size),
+        **{f"episodes_{name}": eps for name, eps in split_eps.items()},
     )
     return {name: arr.astype(np.float32) for name, arr in splits.items()}
