@@ -6,6 +6,7 @@ from dataclasses import replace
 import numpy as np
 import torch
 
+from wifi_uav.device import best_device
 from wifi_uav.config import apply_overrides, get_config
 from wifi_uav.evaluate import make_env
 from wifi_uav.maddpg import ReplayBuffer, SharedMADDPG
@@ -24,7 +25,7 @@ def main() -> None:
         cfg = replace(cfg, drl_episodes=args.episodes)
     cfg = apply_overrides(cfg, args.set)
     positions = args.positions or cfg.position_source
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = best_device(allow_mps=False)
     # Training trajectories use a different seed from the RF dataset and from evaluation.
     env = make_env(cfg, seed=cfg.seed + 1000, use_predictor=positions == "predicted", device=device)
     obs = env.reset()

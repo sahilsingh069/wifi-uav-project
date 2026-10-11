@@ -25,6 +25,7 @@ def test_full_config_matches_manual_core_values():
     assert cfg.n_aps == 8
     assert cfg.n_base_stations == 3
     assert cfg.n_uavs == 5
+    assert cfg.seq_len == 60
     assert cfg.episodes == 500
     assert cfg.steps_per_episode == 150
     assert cfg.drl_episodes == 500

@@ -85,6 +85,11 @@ class UAVCoverageEnv:
         if self.predictor is not None:
             self.signal_model.reset_links()
             self.predictor.reset()
+            # Pre-launch: the ground station hears users' RF for seq_len - 1 steps before the
+            # UAVs start, so the predictor has a full input window from the first decision on.
+            for _ in range(self.cfg.seq_len - 1):
+                self.predictor.observe(self.signal_model.measure(self.user_positions))
+                self.user_positions = self.mobility.step()
         self._sense_users()
         self.prev_coverage = self._compute_coverage()
         return self._observations()

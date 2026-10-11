@@ -21,7 +21,9 @@ class ProjectConfig:
     episodes: int = 500
     steps_per_episode: int = 150
     dt: float = 0.5
-    seq_len: int = 10
+    # 60 steps = 30 s of RF history. Shadowing decorrelates over ~20 m of walking, so a long window
+    # averages several independent shadowing draws (validation RMSE: 10 -> 67 m, 30 -> 59 m, 60 -> 53 m).
+    seq_len: int = 60
     pred_horizon: int = 5
     n_uavs: int = 5
     v_max: float = 20.0
@@ -57,6 +59,7 @@ def get_config(preset: str = "smoke") -> ProjectConfig:
             n_users=6,
             episodes=3,
             steps_per_episode=25,
+            seq_len=10,
             n_uavs=3,
             coverage_radius=150.0,
             batch_size=32,

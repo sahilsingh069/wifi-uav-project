@@ -5,6 +5,7 @@ import argparse
 import numpy as np
 import torch
 
+from wifi_uav.device import best_device
 from wifi_uav.config import get_config
 from wifi_uav.predictor import center_guess_rmse_meters, rmse_meters, train_predictor_on_arrays
 
@@ -16,7 +17,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = get_config(args.preset)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = best_device(allow_mps=True)
     x_train = np.load(cfg.data_dir / "X_train.npy")
     y_train = np.load(cfg.data_dir / "y_train.npy")
     x_val = np.load(cfg.data_dir / "X_val.npy")
@@ -35,14 +36,16 @@ def main() -> None:
         device=device,
         checkpoint_path=cfg.checkpoint_dir / "predictor_best.pt",
     )
+    val_rmse = rmse_meters(model, x_val, y_val, cfg.area_size, device=device)
     rmse = rmse_meters(model, x_test, y_test, cfg.area_size, device=device)
     center_rmse = center_guess_rmse_meters(y_test, cfg.area_size)
     cfg.result_dir.mkdir(parents=True, exist_ok=True)
     (cfg.result_dir / "predictor_summary.txt").write_text(
-        f"RMSE_meters={rmse:.4f}\nCenter_guess_RMSE_meters={center_rmse:.4f}\nepochs_run={len(history['train_loss'])}\n",
+        f"RMSE_meters={rmse:.4f}\nVal_RMSE_meters={val_rmse:.4f}\nCenter_guess_RMSE_meters={center_rmse:.4f}\nepochs_run={len(history['train_loss'])}\n",
         encoding="utf-8",
     )
     print(f"Epochs run: {len(history['train_loss'])}, final train loss: {history['train_loss'][-1]:.5f}")
+    print(f"Validation RMSE: {val_rmse:.2f} m")
     print(f"Test RMSE (held-out episodes): {rmse:.2f} m  |  centre-guess baseline: {center_rmse:.2f} m")
 
 

@@ -6,6 +6,7 @@ import re
 import numpy as np
 import torch
 
+from wifi_uav.device import best_device
 from wifi_uav.config import apply_overrides, get_config
 from wifi_uav.evaluate import (
     BASELINES,
@@ -36,7 +37,7 @@ def main() -> None:
     cfg = apply_overrides(get_config(args.preset), args.set)
     positions = args.positions or cfg.position_source
     episodes = args.episodes or (2 if args.preset == "smoke" else 50)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = best_device(allow_mps=False)
     cfg.result_dir.mkdir(parents=True, exist_ok=True)
 
     rewards_path = cfg.result_dir / "maddpg_rewards.npy"

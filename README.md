@@ -73,33 +73,44 @@ Presets: `smoke` (minutes, checks wiring only, numbers are meaningless), `medium
 Medium preset (18 users, 5 UAVs, 500 m x 500 m), UAVs observing **RF-predicted** user positions,
 50 held-out evaluation episodes per policy, coverage averaged over every step:
 
-| Policy | Coverage | Information used |
-|---|---|---|
-| Greedy (centralised k-means) | 97.7% | every user's position, plans for all UAVs at once |
-| Local greedy | 97.1% | same as one MADDPG actor |
-| **MADDPG (600 episodes)** | **90.5%** | 6 nearest users + teammates, learned policy |
-| Static hover | 64.7% | none |
-| Random walk | 58.9% | none |
+| Policy | Coverage | Flown per UAV per step | Information used |
+|---|---|---|---|
+| Greedy (centralised k-means) | 97.8% | 4.8 m | every user's position, plans for all UAVs at once |
+| Local greedy | 96.2% | 6.4 m | same as one MADDPG actor |
+| **MADDPG (600 episodes)** | **89.7%** | 10.1 m | 6 nearest users + teammates, learned policy |
+| Static hover | 66.2% | 0 m | none |
+| Random walk | 58.9% | 18.5 m | none |
 
-- Position predictor: test RMSE `75.3 m` on held-out episodes vs `202.7 m` for always guessing the
-  area centre. Greedy loses only about 1 point of coverage when it uses predicted instead of true
-  positions, so RF-only localisation is good enough for coverage control.
-- MADDPG beats static hover by 26 points and random by 32, but still trails both hand-written
-  heuristics by about 7 points. In this environment coverage is close to a clustering problem,
+- Position predictor: test RMSE `59.3 m` on held-out episodes (validation `49.5 m`) vs `202.7 m`
+  for always guessing the area centre; mean position error inside the coverage env `47.8 m`.
+- The predictor reads the last 60 RF measurements (30 s). Shadowing decorrelates over about 20 m of
+  walking, so a short window sees one shadowing draw and cannot average it out. Window length was
+  chosen on the validation set only (10 steps 67.0 m, 30 steps 59.4 m, 60 steps 53.0 m); more
+  epochs, a lower learning rate, and 4x more training episodes did not help, because validation
+  loss plateaus after a few epochs while training loss keeps falling (the remaining error is
+  per-episode shadowing that no model can learn). Test RMSE went from `75.3 m` to `59.3 m`.
+- Better prediction also saves energy: with the 10-step predictor greedy flew 9.7 m per step
+  chasing prediction noise; with the 60-step one it flies 4.8 m for the same coverage.
+- UAVs get 30 s of RF history before launch so the predictor has a full window from step one.
+- An earlier version reported 21.76 m RMSE. That number was inflated: overlapping windows were
+  shuffled before the train/test split, so near-duplicates of test windows were in training, and
+  shadowing was redrawn independently every step, which made it easy to average away.
+- MADDPG beats static hover by 23 points and random by 31, but still trails both hand-written
+  heuristics by 6-8 points. In this environment coverage is close to a clustering problem,
   which greedy solves almost exactly; RL would earn its keep with objectives a heuristic can't
   express (obstacles, link quality, battery-aware hand-offs).
-- How MADDPG got from 47% to 90.5%: the first version gave each UAV only distances (no direction)
+- How MADDPG got from 47% to about 90%: the first version gave each UAV only distances (no direction)
   to its nearest users, so its actors saturated and pinned 39% of UAVs to the area edge. Egocentric
   relative observations, a pre-tanh action penalty, a slower actor learning rate, parameter sharing,
   difference rewards, and 600 training episodes fixed that (edge-pinning down to under 5%).
   Doubling gradient updates per step did not help further.
 
-Reproduce (about 10 minutes on a laptop CPU for MADDPG):
+Reproduce (scripts use CUDA, Apple-silicon MPS, or CPU automatically):
 
 ```bash
 python scripts/phase1_collect_data.py --preset medium
 python scripts/phase2_build_features.py --preset medium
-python scripts/phase3_train_predictor.py --preset medium --epochs 8
+python scripts/phase3_train_predictor.py --preset medium   # ~7 min on an M2 GPU (MPS)
 python scripts/phase5_train_maddpg.py --preset medium            # 600 episodes
 python scripts/phase6_evaluate.py --preset medium --episodes 50
 ```

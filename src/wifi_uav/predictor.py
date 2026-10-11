@@ -149,11 +149,18 @@ def rmse_meters(
     y: np.ndarray,
     area_size: float,
     device: str | torch.device = "cpu",
+    batch_size: int = 4096,
 ) -> float:
     device = torch.device(device)
     model = model.to(device)
     model.eval()
-    pred = model(torch.tensor(x, dtype=torch.float32, device=device)).cpu().numpy()
+    # Batched so large evaluation sets fit in GPU memory.
+    pred = np.concatenate(
+        [
+            model(torch.tensor(x[i : i + batch_size], dtype=torch.float32, device=device)).cpu().numpy()
+            for i in range(0, len(x), batch_size)
+        ]
+    )
     err = (pred - y) * area_size
     return float(np.sqrt(np.mean(np.sum(err * err, axis=1))))
 
