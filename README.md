@@ -118,6 +118,29 @@ python scripts/phase6_evaluate.py --preset medium --episodes 50
 `phase5_train_maddpg.py` and `phase6_evaluate.py` accept `--set key=value` to override any config
 field (for example `--set maddpg_gamma=0.9`).
 
+## Watching Training Live
+
+Phase 3 prints one line per epoch and phase 5 one line per episode:
+
+```text
+epoch  train_loss   val_loss   val_RMSE        lr   time
+    1     0.00357    0.00279     52.8 m   1.0e-03    19s  * best, saved
+    2     0.00090    0.00304     55.1 m   7.5e-04    19s  (no improvement 1/15)
+
+episode  noise   reward  coverage  last-10 avg  critic_loss  actor_loss  replay   time
+     14   0.05     1.92     30.1%        31.4%       0.0061     -1.0091     840   1.6s
+```
+
+Full runs also save `results/predictor_history.csv`, `results/predictor_training.png` and
+`results/maddpg_history.csv`. Add `--no-save` to phases 3, 5 and 6 to run a short live demo without
+overwriting trained models or results:
+
+```bash
+python scripts/phase3_train_predictor.py --preset medium --epochs 3 --no-save    # ~1 min on M2
+python scripts/phase5_train_maddpg.py --preset medium --episodes 15 --no-save    # ~30 s
+python scripts/phase6_evaluate.py --preset medium --episodes 5 --no-save         # trained models vs baselines
+```
+
 ## Tests
 
 `30 passed` (`pytest -q`); the smoke pipeline runs all 6 phases end to end.

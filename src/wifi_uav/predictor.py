@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import torch
@@ -64,16 +65,21 @@ def _loader(x: np.ndarray, y: np.ndarray, batch_size: int, shuffle: bool) -> Dat
 
 
 @torch.no_grad()
-def evaluate_loss(model: nn.Module, loader: DataLoader, loss_fn: nn.Module, device: torch.device) -> float:
+def evaluate_loss(
+    model: nn.Module, loader: DataLoader, loss_fn: nn.Module, device: torch.device
+) -> tuple[float, float]:
+    """Mean loss and RMSE (in normalised units) over a loader."""
     model.eval()
     total = 0.0
+    sq_err = 0.0
     count = 0
     for xb, yb in loader:
         xb, yb = xb.to(device), yb.to(device)
-        loss = loss_fn(model(xb), yb)
-        total += float(loss.item()) * len(xb)
+        pred = model(xb)
+        total += float(loss_fn(pred, yb).item()) * len(xb)
+        sq_err += float(((pred - yb) ** 2).sum().item())
         count += len(xb)
-    return total / max(1, count)
+    return total / max(1, count), float(np.sqrt(sq_err / max(1, count)))
 
 
 def train_predictor_on_arrays(
@@ -86,7 +92,14 @@ def train_predictor_on_arrays(
     lr: float = 1e-3,
     device: str | torch.device = "cpu",
     checkpoint_path: str | Path | None = None,
+    area_size: float = 1.0,
+    log: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, list[float]], LSTMTransformerPredictor]:
+    """Train with early stopping on validation loss.
+
+    ``log`` (e.g. ``print``) receives one line per epoch so a run can be watched live;
+    ``area_size`` converts the validation RMSE to metres for that line and for ``history``.
+    """
     device = torch.device(device)
     model = LSTMTransformerPredictor(input_dim=x_train.shape[-1]).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -94,13 +107,18 @@ def train_predictor_on_arrays(
     loss_fn = nn.HuberLoss()
     train_loader = _loader(x_train, y_train, batch_size, True)
     val_loader = _loader(x_val, y_val, batch_size, False)
-    history: dict[str, list[float]] = {"train_loss": [], "val_loss": []}
+    history: dict[str, list[float]] = {"train_loss": [], "val_loss": [], "val_rmse_m": [], "lr": [], "seconds": []}
     best_val = float("inf")
     best_state: dict[str, torch.Tensor] | None = None
     stale = 0
     patience = 15
 
-    for _ in range(epochs):
+    if log is not None:
+        log(f"Training on {len(x_train):,} windows, validating on {len(x_val):,} (device: {device})")
+        log(f"{'epoch':>5}  {'train_loss':>10}  {'val_loss':>9}  {'val_RMSE':>9}  {'lr':>8}  {'time':>5}")
+    for epoch in range(1, epochs + 1):
+        started = time.perf_counter()
+        current_lr = optimizer.param_groups[0]["lr"]
         model.train()
         total = 0.0
         count = 0
@@ -116,11 +134,23 @@ def train_predictor_on_arrays(
 
         scheduler.step()
         train_loss = total / max(1, count)
-        val_loss = evaluate_loss(model, val_loader, loss_fn, device)
+        val_loss, val_rmse = evaluate_loss(model, val_loader, loss_fn, device)
+        seconds = time.perf_counter() - started
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
+        history["val_rmse_m"].append(val_rmse * area_size)
+        history["lr"].append(current_lr)
+        history["seconds"].append(seconds)
+        improved = val_loss < best_val
 
-        if val_loss < best_val:
+        if log is not None:
+            marker = "  * best, saved" if improved else f"  (no improvement {stale + 1}/{patience})"
+            log(
+                f"{epoch:>5}  {train_loss:>10.5f}  {val_loss:>9.5f}  {val_rmse * area_size:>7.1f} m"
+                f"  {current_lr:>8.1e}  {seconds:>4.0f}s{marker}"
+            )
+
+        if improved:
             best_val = val_loss
             best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
             stale = 0
@@ -135,6 +165,8 @@ def train_predictor_on_arrays(
             stale += 1
 
         if stale >= patience:
+            if log is not None:
+                log(f"Early stopping: validation loss has not improved for {patience} epochs.")
             break
 
     if best_state is not None:

@@ -199,6 +199,28 @@ def plot_training_curves(rewards: np.ndarray, coverages: np.ndarray, output: str
     plt.close(fig)
 
 
+def plot_predictor_history(history: dict[str, list[float]], output: str | Path) -> None:
+    """Loss curves and validation RMSE per epoch; the gap between the loss curves shows overfitting."""
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    epochs = np.arange(1, len(history["train_loss"]) + 1)
+    best = int(np.argmin(history["val_loss"])) + 1
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+    axes[0].plot(epochs, history["train_loss"], label="train")
+    axes[0].plot(epochs, history["val_loss"], label="validation")
+    axes[0].set_yscale("log")
+    axes[0].set_title("Huber loss")
+    axes[1].plot(epochs, history["val_rmse_m"], color="C1")
+    axes[1].set_title("Validation RMSE (m)")
+    for ax in axes:
+        ax.axvline(best, color="grey", linestyle="--", linewidth=1, label=f"best epoch {best}")
+        ax.set_xlabel("Epoch")
+        ax.legend()
+    fig.tight_layout()
+    fig.savefig(output, dpi=160)
+    plt.close(fig)
+
+
 def plot_baselines(scores: dict[str, float], output: str | Path) -> None:
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
